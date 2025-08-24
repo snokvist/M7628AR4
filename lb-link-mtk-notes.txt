@@ -1,0 +1,14 @@
+root password unknown
+root:$1$ZvjIxpIk$O1X0HkvJuq4NEv5fDnsC5/
+
+
+debug uart 3
+57600 8N1
+
+press f+enter during bootup
+
+
+mount_root
+awk -F: 'BEGIN{OFS=":"} $1=="root"{$2=""}1' /etc/shadow > /tmp/shadow.new \
+  && mv /tmp/shadow.new /etc/shadow \
+  && chmod 600 /etc/shadow
