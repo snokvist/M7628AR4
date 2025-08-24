@@ -1,3 +1,4 @@
+webui admin/admin
 root password unknown
 root:$1$ZvjIxpIk$O1X0HkvJuq4NEv5fDnsC5/
 
