@@ -1,0 +1,25 @@
+# deps on Ubuntu: build-essential gawk git gettext libncurses5-dev libssl-dev \
+#                 python3 subversion unzip rsync xsltproc
+git clone https://git.openwrt.org/openwrt/openwrt.git
+cd openwrt
+git checkout openwrt-24.10
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+# Drop the files above into place (paths exactly as shown)
+
+make menuconfig
+# Target System:  MediaTek Ralink MIPS
+# Subtarget:      MT76x8
+# Target Profile: Custom M7628AR4
+# (optionally add LuCI etc.)
+
+make -j$(nproc) V=s
+
+
+----------------------------------
+
+setenv ipaddr 192.168.1.1
+setenv serverip 192.168.1.2
+tftpboot 0x80000000 openwrt-ramips-mt76x8-custom_m7628ar4-initramfs-kernel.bin
+bootm 0x80000000
