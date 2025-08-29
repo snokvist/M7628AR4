@@ -6,7 +6,7 @@ define Device/custom_m7628ar4
   DEVICE_MODEL := M7628AR4
   DEVICE_PACKAGES := \
         kmod-mt76 kmod-mt7603 \
-        kmod-mt7615e mt7663-firmware-ap mt7663-firmware-sta \
+        kmod-mt7615e kmod-mt7663-firmware-ap \
         wpad-basic-mbedtls wireless-regdb \
         luci-ssl luci-app-opkg \
         ca-bundle ca-certificates curl
