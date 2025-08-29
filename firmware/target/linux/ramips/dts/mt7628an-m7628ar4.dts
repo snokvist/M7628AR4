@@ -26,42 +26,42 @@
    0x050000..0x1000000: firmware   (rest)
 */
 &spi0 {
-	status = "okay";
+    status = "okay";
 
-	flash@0 {
-		compatible = "jedec,spi-nor";
-		reg = <0>;
-		spi-max-frequency = <50000000>;
+    flash@0 {
+        compatible = "jedec,spi-nor";
+        reg = <0>;
+        spi-max-frequency = <50000000>;
 
-		partitions {
-			compatible = "fixed-partitions";
-			#address-cells = <1>;
-			#size-cells = <1>;
+        partitions {
+            compatible = "fixed-partitions";
+            #address-cells = <1>;
+            #size-cells = <1>;
 
-			uboot: partition@0 {
-				label = "Bootloader";
-				reg = <0x000000 0x030000>;
-				read-only;
-			};
+            uboot: partition@0 { label = "Bootloader"; reg = <0x000000 0x030000>; read-only; };
+            config: partition@30000 { label = "Config"; reg = <0x030000 0x010000>; read-only; };
 
-			config: partition@30000 {
-				label = "Config";
-				reg = <0x030000 0x010000>;
-				read-only;
-			};
+            factory: partition@40000 {
+                label = "Factory";
+                reg = <0x040000 0x010000>;
+                read-only;
 
-			factory: partition@40000 {
-				label = "Factory";
-				reg = <0x040000 0x010000>;
-				read-only;
-			};
+                /* NVMEM helpers for MACs / EEPROM blobs */
+                compatible = "nvmem-cells";
+                #address-cells = <1>;
+                #size-cells = <1>;
 
-			firmware: partition@50000 {
-				label = "firmware";
-				reg = <0x050000 0xFB0000>;
-			};
-		};
-	};
+                macaddr_factory_4: macaddr@4     { reg = <0x0004 0x6>;  };
+                macaddr_factory_28: macaddr@28   { reg = <0x0028 0x6>;  };
+                macaddr_factory_2e: macaddr@2e   { reg = <0x002e 0x6>;  };
+
+                /* 5 GHz MT7663 block starts at 0x8000; MAC at 0x8004 */
+                macaddr_factory_8004: macaddr@8004 { reg = <0x8004 0x6>; };
+            };
+
+            firmware: partition@50000 { label = "firmware"; reg = <0x050000 0xFB0000>; };
+        };
+    };
 };
 
 /* Internal Fast Ethernet MAC – label MAC at factory@0x28 */
@@ -78,5 +78,18 @@
 
 /* PCIe root for the MT7663E 5 GHz card */
 &pcie {
-	status = "okay";
+    status = "okay";
+
+    /* MT7663E (handled by mt7615e) */
+    wifi@0,0 {
+        compatible = "mediatek,mt7615e";
+        reg = <0 0 0 0 0>;
+
+        /* Load calibration/EEPROM for the PCIe card from Factory@0x8000 */
+        mediatek,mtd-eeprom = <&factory 0x8000>;
+
+        /* Give the 5 GHz iface a stable MAC from Factory@0x8004 */
+        nvmem-cells = <&macaddr_factory_8004>;
+        nvmem-cell-names = "mac-address";
+    };
 };
