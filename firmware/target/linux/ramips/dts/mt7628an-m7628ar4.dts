@@ -1,0 +1,101 @@
+// Minimal DTS for your M7628AR4 carrier w/ MT7663E PCIe 5 GHz
+#include "mt7628an.dtsi"
+
+ / {
+    compatible = "custom,m7628ar4", "mediatek,mt7628an-soc";
+    model = "Custom M7628AR4 (MT7628AN + MT7663E)";
+
+    aliases {
+        led-boot = &led_status;
+        led-failsafe = &led_status;
+        led-running = &led_status;
+        led-upgrade = &led_status;
+        label-mac-device = &ethernet;
+    };
+
+    /* Your stock kernel uses console=ttyS1,57600; OpenWrt defaults to ttyS0,115200.
+       Start with ttyS0; if you see no serial, change to ttyS1,57600. */
+    chosen {
+        bootargs = "console=ttyS0,115200";
+    };
+
+    leds: leds {
+        compatible = "gpio-leds";
+        led_status: status {
+            label = "status";
+            gpios = <&gpio 0 GPIO_ACTIVE_LOW>; /* TODO: adjust GPIO if you have a status LED */
+        };
+    };
+
+    keys: keys {
+        compatible = "gpio-keys";
+        reset {
+            label = "reset";
+            gpios = <&gpio 1 GPIO_ACTIVE_LOW>; /* TODO: adjust if you have a reset key */
+            linux,code = <KEY_RESTART>;
+            debounce-interval = <60>;
+        };
+    };
+};
+
+/* 16MB SPI NOR layout from /proc/mtd:
+   0x000000..0x030000 : Bootloader (192 KiB)
+   0x030000..0x040000 : Config     (64 KiB)
+   0x040000..0x050000 : Factory    (64 KiB, contains EEPROM+MACs)
+   0x050000..0x1000000: firmware   (rest)
+*/
+&spi0 {
+    status = "okay";
+
+    flash@0 {
+        compatible = "jedec,spi-nor";
+        reg = <0>;
+        spi-max-frequency = <50000000>;
+
+        partitions {
+            compatible = "fixed-partitions";
+            #address-cells = <1>;
+            #size-cells = <1>;
+
+            uboot: partition@0 {
+                label = "Bootloader";
+                reg = <0x000000 0x030000>;
+                read-only;
+            };
+
+            config: partition@30000 {
+                label = "Config";
+                reg = <0x030000 0x010000>;
+                read-only;
+            };
+
+            factory: partition@40000 {
+                label = "Factory";
+                reg = <0x040000 0x010000>;
+                read-only;
+            };
+
+            firmware: partition@50000 {
+                label = "firmware";
+                reg = <0x050000 0xFB0000>;
+            };
+        };
+    };
+};
+
+/* Internal FE MAC; use factory@0x28 for label MAC (LAN) */
+&ethernet {
+    status = "okay";
+    mtd-mac-address = <&factory 0x28>;
+};
+
+/* Internal 2.4 GHz (mt76) – EEPROM at 0x0 in factory */
+&wmac {
+    status = "okay";
+    mediatek,mtd-eeprom = <&factory 0x0>;
+};
+
+/* Enable PCIe root complex for the 5 GHz MT7663E (PCIe) */
+&pcie {
+    status = "okay";
+};
