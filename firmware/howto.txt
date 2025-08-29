@@ -16,13 +16,12 @@ make menuconfig
 
 make -j$(nproc) V=s
 
+-------------------------------------
 
-----------------------------------
+uci set wireless.default_radio1.macaddr='16:5d:34:c1:1b:ed'   # pick a unique one
+uci commit wireless
+wifi reload
 
-setenv ipaddr 192.168.1.1
-setenv serverip 192.168.1.2
-tftpboot 0x80000000 openwrt-ramips-mt76x8-custom_m7628ar4-initramfs-kernel.bin
-bootm 0x80000000
 
 ----------------------------------------
 
