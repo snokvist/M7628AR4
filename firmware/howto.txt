@@ -23,3 +23,11 @@ setenv ipaddr 192.168.1.1
 setenv serverip 192.168.1.2
 tftpboot 0x80000000 openwrt-ramips-mt76x8-custom_m7628ar4-initramfs-kernel.bin
 bootm 0x80000000
+
+----------------------------------------
+
+ONLY IF ABOVE WWORKS!!!
+
+scp bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-custom_m7628ar4-sysupgrade.bin root@192.168.1.1:/tmp/
+ssh root@192.168.1.1
+sysupgrade -n /tmp/openwrt-ramips-mt76x8-custom_m7628ar4-sysupgrade.bin
