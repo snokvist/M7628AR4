@@ -94,3 +94,23 @@ If you added block-mount/USB storage but don’t actually plug a drive, either r
 
 block detect > /etc/config/fstab
 /etc/init.d/fstab enable; /etc/init.d/fstab start
+
+-----
+
+Short answer: that 28 MB is just a limit, not pre-allocated RAM. tmpfs only uses what’s actually stored under /tmp (right now ~250 KB). So it isn’t “eating” your 64 MB—until you upload big files to /tmp.
+
+If you still want to cap it tighter (to avoid big uploads causing OOM), you can shrink it:
+
+Shrink now (one-off)
+mount -o remount,size=8M /tmp
+df -h | grep /tmp   # verify
+
+Make it persistent (fstab entry)
+uci add fstab mount
+uci set fstab.@mount[-1].target='/tmp'
+uci set fstab.@mount[-1].fstype='tmpfs'
+uci set fstab.@mount[-1].options='nosuid,nodev,noatime,mode=1777,size=8M'
+uci set fstab.@mount[-1].enabled='1'
+uci commit fstab
+/etc/init.d/fstab enable
+/etc/init.d/fstab restart
