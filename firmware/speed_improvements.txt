@@ -9,6 +9,14 @@ nft list ruleset | grep -A2 flowtable
 
 This can add ~30–60% routing/NAT throughput on these chips.
 
+
+
+
+uci set firewall.@defaults[0].flow_offloading='1'
+uci commit firewall
+/etc/init.d/firewall restart
+
+
 2) Don’t run SQM unless you need it
 
 Cake/fq_codel shaping is CPU-expensive here. If you installed SQM for later, leave it disabled:
