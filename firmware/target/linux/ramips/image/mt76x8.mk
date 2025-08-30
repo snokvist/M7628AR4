@@ -5,13 +5,12 @@ define Device/custom_m7628ar4
   DEVICE_VENDOR := Custom
   DEVICE_MODEL := M7628AR4
   DEVICE_PACKAGES := \
-        kmod-mt76 kmod-mt7603 \
-        kmod-mt7615e kmod-mt7663-firmware-ap \
+        kmod-mt76 kmod-mt7603 kmod-mt7615e kmod-mt7663-firmware-ap \
         wpad-basic-mbedtls wireless-regdb \
-        luci-ssl luci-app-opkg \
-        ca-bundle ca-certificates curl \
-        coreutils-timeout htop nano \
-        bash luci-app-ttyd ttyd luci-app-sqm \
+        luci-ssl luci-app-package-manager \
+        bash nano htop coreutils-timeout \
+        ttyd luci-app-ttyd \
+        sqm-scripts luci-app-sqm \
         wfb-ng wfb-ng-tun
 endef
 TARGET_DEVICES += custom_m7628ar4
