@@ -1,5 +1,4 @@
 // M7628AR4 (MT7628AN 2.4 GHz + MT7663E PCIe 5 GHz)
-// Factory partition contains EEPROM @ 0x0 and MACs at 0x04/0x28/0x2E.
 
 #include "mt7628an.dtsi"
 #include <dt-bindings/gpio/gpio.h>
@@ -14,17 +13,16 @@
 	};
 
 	chosen {
-		/* Use your vendor’s UART default so you see serial immediately. */
 		bootargs = "console=ttyS1,57600";
 	};
 };
 
-/* 16 MiB SPI-NOR as per your /proc/mtd:
-   0x000000..0x030000 : Bootloader (192 KiB)
-   0x030000..0x040000 : Config     (64 KiB)
-   0x040000..0x050000 : Factory    (64 KiB)
-   0x050000..0x1000000: firmware   (rest)
-*/
+/* 16 MiB SPI-NOR layout:
+ * 0x000000..0x030000 : Bootloader (192 KiB)
+ * 0x030000..0x040000 : Config     (64 KiB)
+ * 0x040000..0x050000 : Factory    (64 KiB)
+ * 0x050000..0x1000000: firmware   (rest)
+ */
 &spi0 {
 	status = "okay";
 
@@ -36,55 +34,59 @@
 		partitions {
 			compatible = "fixed-partitions";
 			#address-cells = <1>;
-			#size-cells = <1>;
+			#size-cells   = <1>;
 
-			uboot: partition@0 { label = "Bootloader"; reg = <0x000000 0x030000>; read-only; };
-			config: partition@30000 { label = "Config";     reg = <0x030000 0x010000>; read-only; };
-
-				factory: partition@40000 {
-				    label = "Factory";
-				    reg = <0x040000 0x010000>;
-				    read-only;
-				};
-
-				/* Expose EEPROM + MAC as NVMEM cells */
-				compatible = "nvmem-cells";
-				#address-cells = <1>;
-				#size-cells = <1>;
-
-				eeprom_7663: eeprom@8000 { reg = <0x8000 0x1000>; };  /* MT7663 EEPROM blob */
-				macaddr_factory_8004: macaddr@8004 { reg = <0x8004 0x6>; }; /* 5 GHz MAC */
+			uboot: partition@0 {
+				label = "Bootloader";
+				reg = <0x000000 0x030000>;
+				read-only;
 			};
 
-			firmware: partition@50000 { label = "firmware"; reg = <0x050000 0xFB0000>; };
+			config: partition@30000 {
+				label = "Config";
+				reg = <0x030000 0x010000>;
+				read-only;
+			};
+
+			factory: partition@40000 {
+				label = "Factory";
+				reg = <0x040000 0x010000>;
+				read-only;
+			};
+
+			firmware: partition@50000 {
+				label = "firmware";
+				reg = <0x050000 0xFB0000>;
+			};
 		};
 	};
 };
 
-/* Internal Fast Ethernet MAC – label MAC at factory@0x28 */
+/* Ethernet gets its MAC from Factory@0x28 (matches your board.json) */
 &ethernet {
 	status = "okay";
 	mtd-mac-address = <&factory 0x28>;
 };
 
-/* Internal 2.4 GHz (mt76) – EEPROM at factory@0x0 */
+/* Internal 2.4 GHz (SoC) — EEPROM at Factory@0x0 */
 &wmac {
 	status = "okay";
 	mediatek,mtd-eeprom = <&factory 0x0>;
 };
 
-/* PCIe root for the MT7663E 5 GHz card */
+/* PCIe root (your runtime path is pcie@10140000) */
 &pcie {
-    status = "okay";
+	status = "okay";
 
-    wifi@0,0 {
-        compatible = "mediatek,mt7615e";
-        reg = <0x0000 0 0 0 0>;
+	/* MT7663E over PCIe handled by mt7615e driver */
+	wifi@0,0 {
+		compatible = "mediatek,mt7615e";
+		reg = <0x0000 0 0 0 0>;
 
-        /* Load calibration/EEPROM for the PCIe card from Factory@0x8000 */
-        mediatek,mtd-eeprom = <&factory 0x8000>;
+		/* Cal/EEPROM for the PCIe card lives at Factory@0x8000 */
+		mediatek,mtd-eeprom = <&factory 0x8000>;
 
-        /* Give 5 GHz a fixed MAC from Factory@0x8004 */
-        mtd-mac-address = <&factory 0x8004>;
-    };
+		/* 5 GHz MAC at Factory@0x8004 */
+		mtd-mac-address = <&factory 0x8004>;
+	};
 };
