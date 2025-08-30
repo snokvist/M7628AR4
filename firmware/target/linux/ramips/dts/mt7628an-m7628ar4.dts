@@ -9,7 +9,7 @@
 	model = "Custom M7628AR4 (MT7628AN + MT7663E)";
 
 	aliases { label-mac-device = &ethernet; };
-	chosen { bootargs = "console=ttyS1,57600"; };
+	chosen {bootargs = "console=ttyS1,57600 rootfstype=squashfs,jffs2";};
 };
 
 &spi0 {
