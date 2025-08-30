@@ -127,3 +127,124 @@ uci set fstab.@mount[-1].enabled='1'
 uci commit fstab
 /etc/init.d/fstab enable
 /etc/init.d/fstab restart
+
+
+
+
+
+Runtime trims (no rebuild needed)
+1) Disable IPv6 userland (if you don’t need v6)
+/etc/init.d/odhcpd stop; /etc/init.d/odhcpd disable
+opkg remove --force-depends odhcpd-ipv6only odhcp6c luci-proto-ipv6 2>/dev/null
+
+uci -q batch << 'EOF'
+set network.globals.ula_prefix=''
+set dhcp.lan.ra='disabled'
+set dhcp.lan.dhcpv6='disabled'
+set dhcp.lan.ndp='disabled'
+commit dhcp
+commit network
+EOF
+
+/etc/init.d/network restart
+
+2) Slim dnsmasq
+uci -q batch << 'EOF'
+set dhcp.@dnsmasq[0].cachesize='100'      # default 150; go lower if you like
+set dhcp.@dnsmasq[0].dnsforwardmax='150'  # cap concurrent queries
+set dhcp.@dnsmasq[0].ednspacket_max='1232'
+set dhcp.@dnsmasq[0].cache_neg_ttl='60'
+set dhcp.@dnsmasq[0].rebind_protection='0'
+commit dhcp
+EOF
+/etc/init.d/dnsmasq restart
+
+3) Reduce conntrack size & timeouts
+
+(Default nf_conntrack can chew RAM.)
+
+uci -q batch << 'EOF'
+set system.@system[0].hostname='OpenWrt'
+set system.@system[0].conloglevel='7'
+# kernel sysctls
+set system.@system[0].ttylogin='0'
+set system.@system[0].zram_size_mb='24'
+set system.@system[0].zram_comp_algo='lz4'
+commit system
+EOF
+
+# conntrack limits via sysctl.d
+cat >/etc/sysctl.d/99-tiny.conf <<'EOT'
+net.netfilter.nf_conntrack_max=2048
+net.netfilter.nf_conntrack_generic_timeout=60
+net.netfilter.nf_conntrack_tcp_timeout_established=1800
+net.core.rmem_max=262144
+net.core.wmem_max=262144
+EOT
+sysctl -p /etc/sysctl.d/99-tiny.conf
+
+
+(If your environment is tiny, you can push nf_conntrack_max down to 1024.)
+
+4) Trim logging & LuCI/uHTTPd
+uci set system.@system[0].log_size='32'    # KB in RAM for logd (default 64)
+uci set system.@system[0].log_buffer_size='16'  # kernel dmesg buffer (KB)
+uci commit system
+
+uci -q batch << 'EOF'
+set uhttpd.main.max_connections='50'
+set uhttpd.main.script_timeout='30'
+set uhttpd.main.network_timeout='15'
+set uhttpd.main.tcp_keepalive='1'
+del_list uhttpd.main.index_page='/cgi-bin/luci'  # keep index lean (optional)
+commit uhttpd
+EOF
+/etc/init.d/uhttpd restart
+
+
+Also make sure you’re not using TLS (you already dropped luci-ssl) to avoid libopenssl in RAM.
+
+5) tmpfs & zram (you already started)
+
+Keep /tmp at 12–16 MB:
+
+uci set system.@system[0].tmpfs_size='12m'
+uci commit system
+
+
+zram: 24–32 MB is the sweet spot on 64 MB RAM:
+
+/etc/init.d/zram enable
+/etc/init.d/zram restart
+swapon -s
+
+
+Verify kernel has swap: zcat /proc/config.gz | grep ^CONFIG_SWAP=y.
+
+6) Cull services you don’t need
+for S in nlbwmon collectd sqm uhttpd-mod-ubus # (remove ones you truly don’t need)
+do /etc/init.d/$S stop 2>/dev/null; /etc/init.d/$S disable 2>/dev/null; done
+
+
+(Keep uhttpd-mod-ubus if you want LuCI fully functional. Disable SQM unless you actually use it; it eats RAM/CPU.)
+
+7) Wi-Fi userland
+
+If you never run STA/mesh, wpad-mini is even smaller than wpad-basic (but loses 802.11r/k/v and SAE/OWE options).
+
+For AP-only WPA2-PSK, wpad-mini is usually enough:
+
+opkg remove wpad-basic-*; opkg install wpad-mini
+
+
+(Or bake wpad-mini into DEVICE_PACKAGES and remove the basic variant there.)
+
+Quick “what changed” meter
+
+Removing IPv6 userland, PPP, and extra mt76 modules typically frees ~4–8 MB RAM total after boot.
+
+Smaller dnsmasq/conntrack cuts another ~1–2 MB depending on load.
+
+Dropping TLS for LuCI avoids openssl/mbedtls in RAM during normal operation.
+
+zram helps cushion spikes (web UI, opkg) without OOM.
