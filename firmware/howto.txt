@@ -6,6 +6,11 @@ git checkout openwrt-24.10
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
+(cleaning)
+rm -rf build_dir/target-*/root-ramips
+rm -rf bin/targets/ramips/mt76x8
+
+
 # Drop the files above into place (paths exactly as shown)
 
 make menuconfig
