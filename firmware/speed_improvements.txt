@@ -1,0 +1,96 @@
+1) Fast-path NAT (biggest win)
+uci set firewall.@defaults[0].flow_offloading='1'
+uci -q delete firewall.@defaults[0].flow_offloading_hw   # 7628 has no hw offload
+uci commit firewall
+/etc/init.d/firewall restart
+# verify:
+nft list ruleset | grep -A2 flowtable
+
+
+This can add ~30–60% routing/NAT throughput on these chips.
+
+2) Don’t run SQM unless you need it
+
+Cake/fq_codel shaping is CPU-expensive here. If you installed SQM for later, leave it disabled:
+
+/etc/init.d/sqm stop
+/etc/init.d/sqm disable
+
+3) Keep RAM breathing (zram + lighter services)
+
+Tune zram-swap (if you installed kmod-zram zram-swap):
+
+uci set system.@system[0].zram_size_mb='48'
+uci set system.@system[0].zram_comp_algo='lz4'
+uci commit system
+/etc/init.d/zram start
+/etc/init.d/zram enable
+
+
+Trim daemons you don’t use (saves CPU/RAM). Examples:
+
+/etc/init.d/uhttpd stop; /etc/init.d/uhttpd disable         # if you won’t use LuCI
+/etc/init.d/odhcpd stop; /etc/init.d/odhcpd disable         # if you don’t use IPv6
+opkg remove odhcpd-ipv6only odhcp6c luci-proto-ipv6 2>/dev/null
+
+
+Shrink logging:
+
+uci set system.@system[0].log_size='64'
+uci set system.@system[0].log_buffer_size='32'
+uci commit system; /etc/init.d/log restart
+
+4) Cut connection-tracking overhead (good on low-RAM)
+uci set firewall.@defaults[0].synflood_protect='1'
+uci commit firewall; /etc/init.d/firewall restart
+
+cat >> /etc/sysctl.conf << 'EOF'
+net.netfilter.nf_conntrack_max=4096
+net.core.netdev_max_backlog=1000
+net.ipv4.tcp_fastopen=3
+EOF
+sysctl -p /etc/sysctl.conf
+
+5) Wi-Fi settings that help CPU
+
+2.4 GHz:
+
+uci set wireless.radio0.country='SE'
+uci set wireless.radio0.htmode='HT20'          # 20 MHz is friendlier to CPU/airtime
+uci set wireless.default_radio0.wmm='1'
+uci set wireless.default_radio0.ieee80211w='0' # disable MFP unless required
+uci commit wireless; wifi reload
+
+
+5 GHz (MT7663E):
+
+uci set wireless.radio1.country='SE'
+uci set wireless.radio1.htmode='VHT40'         # VHT80 is OK, but VHT40 cuts CPU load
+uci set wireless.default_radio1.wmm='1'
+uci set wireless.default_radio1.ieee80211w='0'
+uci commit wireless; wifi reload
+
+
+Optional: raise beacon interval to shave interrupts a touch (APs only):
+
+uci set wireless.default_radio0.beacon_int='200'
+uci set wireless.default_radio1.beacon_int='200'
+uci commit wireless; wifi reload
+
+6) Bridge/multicast noise
+
+Turn on IGMP snooping so IPTV/multicast doesn’t flood Wi-Fi:
+
+uci set network.lan.igmp_snooping='1'
+uci commit network; /etc/init.d/network restart
+
+7) Keep LuCI light
+
+You already switched to luci-light. In LuCI → Status pages, drop the auto-refresh interval (or disable it) to reduce CPU spikes.
+
+8) USB/storage (only when needed)
+
+If you added block-mount/USB storage but don’t actually plug a drive, either remove them or create a minimal fstab so blockd doesn’t churn. When you do use storage:
+
+block detect > /etc/config/fstab
+/etc/init.d/fstab enable; /etc/init.d/fstab start
