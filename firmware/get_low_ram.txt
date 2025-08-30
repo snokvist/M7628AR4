@@ -1,0 +1,94 @@
+1) Stop LuCI until you need it
+
+LuCI = uhttpd (webserver) + rpcd (backend). You can keep the packages installed but keep them off.
+
+# stop now
+/etc/init.d/uhttpd stop
+/etc/init.d/rpcd stop
+
+# keep them off across reboots
+/etc/init.d/uhttpd disable
+/etc/init.d/rpcd disable
+
+
+Handy toggles:
+
+cat >/usr/bin/luci-on <<'EOF'
+#!/bin/sh
+/etc/init.d/rpcd start
+/etc/init.d/uhttpd start
+EOF
+chmod +x /usr/bin/luci-on
+
+cat >/usr/bin/luci-off <<'EOF'
+#!/bin/sh
+/etc/init.d/uhttpd stop
+/etc/init.d/rpcd stop
+EOF
+chmod +x /usr/bin/luci-off
+
+2) Disable other non-essential daemons
+
+Run this—anything missing is silently skipped:
+
+for s in cron odhcpd sqm urngd banip ddns; do
+  /etc/init.d/$s stop 2>/dev/null
+  /etc/init.d/$s disable 2>/dev/null
+done
+
+
+cron – if you don’t use scheduled tasks.
+
+odhcpd – only if you don’t serve IPv6.
+
+sqm – only if you don’t need SQM.
+
+urngd – after boot it’s mostly idle; stopping can free a bit of RAM.
+
+banip/ddns – if you ever installed them.
+
+3) Keep essential ones on
+
+Don’t touch these unless you know why: procd, ubusd, netifd, firewall, dnsmasq (if you serve DHCP/DNS), hostapd/wpa_supplicant (Wi-Fi).
+
+4) Trim dnsmasq’s footprint
+
+Small but free:
+
+uci set dhcp.@dnsmasq[0].cachesize='100'    # or '0' to disable cache
+uci set dhcp.@dnsmasq[0].dnsforwardmax='25'
+uci set dhcp.@dnsmasq[0].ednspacket_max='1232'
+uci commit dhcp
+/etc/init.d/dnsmasq restart
+
+
+If you don’t use the router as DNS at all, you can even stop dnsmasq and serve DHCP-only (or disable DHCP on LAN entirely):
+
+uci set dhcp.lan.ignore='1'   # disable DHCP server on LAN
+uci commit dhcp
+/etc/init.d/dnsmasq restart
+
+5) Shrink logging buffers
+uci set system.@system[0].log_buffer_size='64'   # KB
+uci commit system
+/etc/init.d/log restart
+
+6) Wi-Fi: keep only what you use
+
+Remove extra SSIDs/VIFs you don’t need (each BSS adds hostapd instance).
+
+Lower hostapd logging (in /etc/config/wireless per iface):
+
+uci set wireless.@wifi-iface[0].logger_syslog_level='2'
+uci set wireless.@wifi-iface[0].logger_stdout_level='2'
+uci commit wireless; wifi reload
+
+7) Review what’s actually enabled
+echo "Enabled init scripts:"
+for s in /etc/init.d/*; do $s enabled 2>/dev/null && basename "$s"; done
+
+
+Disable anything you recognize as unneeded:
+
+/etc/init.d/<service> disable
+/etc/init.d/<service> stop
