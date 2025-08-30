@@ -11,7 +11,6 @@ define Device/custom_m7628ar4
         wpad-basic-mbedtls wireless-regdb \
         luci-app-package-manager \
         nano-tiny coreutils-timeout \
-        kmod-zram zram-swap \
         wfb-ng wfb-ng-tun kmod-usb2 kmod-usb-ohci kmod-usb-ehci kmod-usb-storage block-mount bash
 endef
 TARGET_DEVICES += custom_m7628ar4
