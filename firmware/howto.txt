@@ -37,6 +37,21 @@ ssh root@192.168.1.1
 sysupgrade -n /tmp/openwrt-ramips-mt76x8-custom_m7628ar4-sysupgrade.bin
 
 
+Rebuild (clean kernel so the new config is used)
+make target/linux/clean
+make -j"$(nproc)" V=s
+
+Verify before flashing
+grep -E '^(CONFIG_KERNEL_SWAP)=' .config
+# should show CONFIG_KERNEL_SWAP=y
+
+grep -E '^(CONFIG_SWAP|CONFIG_ZSMALLOC|CONFIG_ZRAM)=' \
+  build_dir/target-*/linux-ramips_mt76x8/linux-*/.config
+# Expect: CONFIG_SWAP=y (and ZSMALLOC/ZRAM = y/m)
+
+
+
+
 #Mounting usb sticks
 block detect > /etc/config/fstab
 /etc/init.d/fstab enable
