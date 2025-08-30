@@ -248,3 +248,31 @@ Smaller dnsmasq/conntrack cuts another ~1–2 MB depending on load.
 Dropping TLS for LuCI avoids openssl/mbedtls in RAM during normal operation.
 
 zram helps cushion spikes (web UI, opkg) without OOM.
+
+
+
+
+If your ISP is plain DHCP over Ethernet (most cable/FTTH routers)
+uci set network.wan.proto='dhcp'
+uci -q delete network.wan.username
+uci -q delete network.wan.password
+# kill the IPv6 WAN interface if it exists (you removed odhcp6c)
+uci -q delete network.wan6
+uci commit network
+/etc/init.d/network restart
+
+If your ISP requires PPPoE
+
+Reinstall the PPPoE stack and keep proto pppoe:
+
+opkg update
+opkg install ppp ppp-mod-pppoe kmod-pppoe kmod-pppox kmod-slhc
+/etc/init.d/network restart
+
+If the warning is actually for WAN6 (IPv6) only
+
+You removed IPv6 client (odhcpc6), so delete the interface:
+
+uci -q delete network.wan6
+uci commit network
+/etc/init.d/network restart
