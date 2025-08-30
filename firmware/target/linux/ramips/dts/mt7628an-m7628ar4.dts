@@ -41,10 +41,11 @@
 			uboot: partition@0 { label = "Bootloader"; reg = <0x000000 0x030000>; read-only; };
 			config: partition@30000 { label = "Config";     reg = <0x030000 0x010000>; read-only; };
 
-			factory: partition@40000 {
-				label = "Factory";
-				reg = <0x040000 0x010000>;
-				read-only;
+				factory: partition@40000 {
+				    label = "Factory";
+				    reg = <0x040000 0x010000>;
+				    read-only;
+				};
 
 				/* Expose EEPROM + MAC as NVMEM cells */
 				compatible = "nvmem-cells";
@@ -74,20 +75,16 @@
 
 /* PCIe root for the MT7663E 5 GHz card */
 &pcie {
-	status = "okay";
+    status = "okay";
 
-	/* MT7663E over PCIe (handled by mt76) */
-	wifi@0,0 {
-		compatible = "mediatek,mt76";
-		reg = <0x0000 0 0 0 0>;
+    wifi@0,0 {
+        compatible = "mediatek,mt7615e";
+        reg = <0x0000 0 0 0 0>;
 
-		/* Feed board EEPROM + MAC via NVMEM */
-		nvmem-cells = <&eeprom_7663 &macaddr_factory_8004>;
-		nvmem-cell-names = "eeprom", "mac-address";
+        /* Load calibration/EEPROM for the PCIe card from Factory@0x8000 */
+        mediatek,mtd-eeprom = <&factory 0x8000>;
 
-		/* If you prefer the legacy properties, these also work:
-		 * mediatek,mtd-eeprom = <&factory 0x8000>;
-		 * mtd-mac-address = <&factory 0x8004>;
-		 */
-	};
+        /* Give 5 GHz a fixed MAC from Factory@0x8004 */
+        mtd-mac-address = <&factory 0x8004>;
+    };
 };
