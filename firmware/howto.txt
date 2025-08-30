@@ -35,3 +35,10 @@ ONLY IF ABOVE WWORKS!!!
 scp bin/targets/ramips/mt76x8/openwrt-ramips-mt76x8-custom_m7628ar4-sysupgrade.bin root@192.168.1.1:/tmp/
 ssh root@192.168.1.1
 sysupgrade -n /tmp/openwrt-ramips-mt76x8-custom_m7628ar4-sysupgrade.bin
+
+
+#Mounting usb sticks
+block detect > /etc/config/fstab
+/etc/init.d/fstab enable
+/etc/init.d/fstab start
+
