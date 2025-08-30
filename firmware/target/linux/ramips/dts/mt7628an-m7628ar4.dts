@@ -1,4 +1,4 @@
-// M7628AR4 (MT7628AN 2.4 GHz + MT7663E PCIe 5 GHz)
+// mt7628an-m7628ar4.dts
 
 #include "mt7628an.dtsi"
 #include <dt-bindings/gpio/gpio.h>
@@ -8,24 +8,12 @@
 	compatible = "custom,m7628ar4", "mediatek,mt7628an-soc";
 	model = "Custom M7628AR4 (MT7628AN + MT7663E)";
 
-	aliases {
-		label-mac-device = &ethernet;
-	};
-
-	chosen {
-		bootargs = "console=ttyS1,57600";
-	};
+	aliases { label-mac-device = &ethernet; };
+	chosen { bootargs = "console=ttyS1,57600"; };
 };
 
-/* 16 MiB SPI-NOR layout:
- * 0x000000..0x030000 : Bootloader (192 KiB)
- * 0x030000..0x040000 : Config     (64 KiB)
- * 0x040000..0x050000 : Factory    (64 KiB)
- * 0x050000..0x1000000: firmware   (rest)
- */
 &spi0 {
 	status = "okay";
-
 	flash@0 {
 		compatible = "jedec,spi-nor";
 		reg = <0>;
@@ -34,59 +22,57 @@
 		partitions {
 			compatible = "fixed-partitions";
 			#address-cells = <1>;
-			#size-cells   = <1>;
+			#size-cells = <1>;
 
-			uboot: partition@0 {
-				label = "Bootloader";
-				reg = <0x000000 0x030000>;
-				read-only;
-			};
-
-			config: partition@30000 {
-				label = "Config";
-				reg = <0x030000 0x010000>;
-				read-only;
-			};
+			partition@0 { label = "Bootloader"; reg = <0x000000 0x030000>; read-only; };
+			partition@30000 { label = "Config";     reg = <0x030000 0x010000>; read-only; };
 
 			factory: partition@40000 {
 				label = "Factory";
 				reg = <0x040000 0x010000>;
 				read-only;
+
+				/* NVMEM provider for EEPROM + MAC cells */
+				compatible = "nvmem-cells";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				eeprom_7663: eeprom@8000 { reg = <0x8000 0x1000>; };   /* MT7663 EEPROM blob */
+				macaddr_factory_8004: macaddr@8004 { reg = <0x8004 0x6>; }; /* 5 GHz MAC */
 			};
 
-			firmware: partition@50000 {
-				label = "firmware";
-				reg = <0x050000 0xFB0000>;
-			};
+			firmware: partition@50000 { label = "firmware"; reg = <0x050000 0xFB0000>; };
 		};
 	};
 };
 
-/* Ethernet gets its MAC from Factory@0x28 (matches your board.json) */
-&ethernet {
-	status = "okay";
-	mtd-mac-address = <&factory 0x28>;
-};
+/* Internal FE MAC */
+&ethernet { status = "okay"; mtd-mac-address = <&factory 0x28>; };
 
-/* Internal 2.4 GHz (SoC) — EEPROM at Factory@0x0 */
-&wmac {
-	status = "okay";
-	mediatek,mtd-eeprom = <&factory 0x0>;
-};
+/* 2.4 GHz wmac (OK already) */
+&wmac { status = "okay"; mediatek,mtd-eeprom = <&factory 0x0>; };
 
-/* PCIe root (your runtime path is pcie@10140000) */
-&pcie {
+/* PCIe root + MT7663E 5 GHz */
+&pcie { status = "okay"; };
+
+&pcie0 {
 	status = "okay";
 
-	/* MT7663E over PCIe handled by mt7615e driver */
 	wifi@0,0 {
 		compatible = "mediatek,mt7615e";
 		reg = <0x0000 0 0 0 0>;
 
-		/* Cal/EEPROM for the PCIe card lives at Factory@0x8000 */
+		/* calibration blob */
 		mediatek,mtd-eeprom = <&factory 0x8000>;
 
-		/* 5 GHz MAC at Factory@0x8004 */
-		mtd-mac-address = <&factory 0x8004>;
+		/* MAC via nvmem (don’t use mtd-mac-address here) */
+		nvmem-cells = <&macaddr_factory_8004>;
+		nvmem-cell-names = "mac-address";
+
+		/* Often required on 7663 to get sane power tables */
+		mediatek,eeprom-merge-otp;
+
+		/* (Optional) keep 5 GHz only here */
+		ieee80211-freq-limit = <5000000 6000000>;
 	};
 };
