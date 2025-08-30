@@ -9,6 +9,9 @@ define Device/custom_m7628ar4
         kmod-mt7615e kmod-mt7663-firmware-ap \
         wpad-basic-mbedtls wireless-regdb \
         luci-ssl luci-app-opkg \
-        ca-bundle ca-certificates curl
+        ca-bundle ca-certificates curl \
+        coreutils-timeout htop nano \
+        bash luci-app-ttyd ttyd luci-app-sqm \
+        wfb-ng wfb-ng-tun
 endef
 TARGET_DEVICES += custom_m7628ar4
