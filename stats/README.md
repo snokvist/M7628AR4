@@ -1,5 +1,7 @@
 # OpenWrt Wireless Diagnostics Cheatsheet
 
+run codex resume 0199e3bd-974b-7f83-89de-d502e39b99b8
+
 ## Environment Basics
 - Router: `ssh root@192.168.2.1`
 - Radios: `phy0-sta0` (2.4 GHz client, SSID `Trollvinter`), `phy1-sta0` (5 GHz client, SSID `Drone`)
