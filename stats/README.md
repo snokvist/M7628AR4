@@ -212,4 +212,43 @@ Use the metrics below to identify a link that is unstable or about to degrade. C
   ```
 - Combine 2.4 GHz metrics with the same commands by swapping `phy1-sta0` for `phy0-sta0`. Remember that the MT7628 driver reports `noise: 0`; rely on survey data or external spectrum checks for SNR on that radio.
 
+## UDP Link Telemetry Pipeline
+
+- Build the sender (`wifi_metrics_sender.c`) and receiver (`osd_feed.c`):
+  ```sh
+  gcc -Wall -Wextra -std=c11 wifi_metrics_sender.c -o wifi_metrics_sender
+  gcc -Wall -Wextra -std=c11 osd_feed.c -o osd_feed
+  ```
+- For OpenWrt targets use the staged cross toolchain:
+  ```sh
+  /home/snokvist/dev/openwrt/staging_dir/toolchain-mipsel_24kc_gcc-14.3.0_musl/bin/mipsel-openwrt-linux-musl-gcc \
+      -O2 -pipe -mno-branch-likely -mips32r2 -EL -std=c11 wifi_metrics_sender.c -o wifi_metrics_sender
+  /home/snokvist/dev/openwrt/staging_dir/toolchain-mipsel_24kc_gcc-14.3.0_musl/bin/mipsel-openwrt-linux-musl-gcc \
+      -O2 -pipe -mno-branch-likely -mips32r2 -EL -std=c11 osd_feed.c -o osd_feed
+  ```
+- On the router run the sender, locking to the live peer and pointing at the OSD host:
+- On the router run the sender, locking to the live peer and pointing at the OSD host:
+  ```sh
+  ./wifi_metrics_sender -m 98:03:cf:cf:a4:28 -H 192.168.2.20 -i 250 -v
+  # or discover peers first
+  ./wifi_metrics_sender -L
+  ```
+  The sender polls `iw dev <iface> station get <MAC>`, normalises RSSI, derives the link score from retry/failed/beacon deltas (smoothed with an EMA), and emits JSON:
+  ```
+  {
+    "rssi": <0-100>, "link": <0-100>,
+    "text": ["RSSI","Link"], "value": [<rssi>,<link>],
+    "raw": {
+      "signal": dBm,
+      "retry_ratio": …,
+      "retry_rate": …/s,
+      "fail_rate": …/s,
+      "beacon_rate": …/s,
+      "packet_rate": …/s
+    }
+  }
+  ```
+- Run `osd_feed` on the host to bridge the UDP payload into the UNIX socket (`/run/pixelpilot/osd.sock` by default). It keeps the latest RSSI/Link, publishes `text/value` updates at ~1 Hz even when the UDP feed stalls, and reconnects to the socket if needed.
+- For quick sanity checks use verbose mode on the sender (shows refresh Hz and raw rates) and watch the receiver logs—both should show two entries (`RSSI`, `Link`) with the same update counter/Hz.
+
 All commands above were executed against the router (kernel 6.6.102, OpenWrt build 2025-08-28) and produced the noted sample values.

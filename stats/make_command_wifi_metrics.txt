@@ -1,0 +1,1 @@
+/home/snokvist/dev/openwrt/staging_dir/toolchain-mipsel_24kc_gcc-14.3.0_musl/bin/mipsel-openwrt-linux-musl-gcc       -O2 -pipe -mno-branch-likely -mips32r2 -EL -std=c11 wifi_metrics_sender.c -o wifi_metrics_sender
