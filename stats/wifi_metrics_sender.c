@@ -498,7 +498,7 @@ static struct metrics derive_metrics(const struct station_sample *sample,
     m.link_all_norm = NAN;
     m.raw_station = *sample;
     if (!isnan(sample->signal_dbm)) {
-        m.rssi_norm = normalize_linear(sample->signal_dbm, -85.0, 20.0);
+        m.rssi_norm = normalize_linear(sample->signal_dbm, -85.0, -20.0);
         m.valid_rssi = true;
     }
     if (tx) {
