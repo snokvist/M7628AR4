@@ -200,6 +200,51 @@ static int list_stations(const char *iface) {
     return 0;
 }
 
+static int find_first_station(const char *iface, char *mac_out, size_t mac_len) {
+    if (!mac_out || mac_len == 0) return -1;
+
+    char cmd[160];
+    int written = snprintf(cmd, sizeof(cmd), "iw dev %s station dump", iface);
+    if (written < 0 || (size_t)written >= sizeof(cmd)) {
+        fprintf(stderr, "Command overflow\n");
+        return -1;
+    }
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+        fprintf(stderr, "popen(%s) failed: %s\n", cmd, strerror(errno));
+        return -1;
+    }
+
+    char line[256];
+    bool found = false;
+    while (fgets(line, sizeof(line), fp)) {
+        char *trimmed = trim(line);
+        if (strncmp(trimmed, "Station ", 8) == 0) {
+            char mac[32] = {0};
+            if (sscanf(trimmed + 8, "%31s", mac) == 1) {
+                strncpy(mac_out, mac, mac_len - 1);
+                mac_out[mac_len - 1] = '\0';
+                found = true;
+                break;
+            }
+        }
+    }
+
+    int status = pclose(fp);
+    if (status == -1) {
+        fprintf(stderr, "station dump failed to close\n");
+        return -1;
+    }
+
+    if (!found) {
+        fprintf(stderr, "No stations found on %s\n", iface);
+        return 1;
+    }
+
+    return 0;
+}
+
 static int fetch_station_metrics(const char *iface, const char *target_mac,
                                  struct station_sample *out,
                                  char *matched_mac, size_t matched_len) {
@@ -717,8 +762,17 @@ int main(int argc, char **argv) {
     }
 
     if (!mac_filter[0]) {
-        fprintf(stderr, "A MAC address is required (use -m or -L first)\n");
-        return 1;
+        char first_mac[32] = {0};
+        int rc = find_first_station(device, first_mac, sizeof(first_mac));
+        if (rc != 0) {
+            if (rc > 0) {
+                fprintf(stderr, "Unable to find a station on %s; specify -m\n", device);
+            }
+            return 1;
+        }
+        normalize_mac(first_mac, mac_filter, sizeof(mac_filter));
+        printf("Defaulting to station %s\n", first_mac);
+        fflush(stdout);
     }
 
     char phy_name[64];
