@@ -13,6 +13,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <limits.h>
 
 struct station_sample {
     double signal_dbm;
@@ -20,19 +21,34 @@ struct station_sample {
     double tx_retries;
     double tx_failed;
     double beacon_loss;
+    double rx_packets;
+    double rx_duplicates;
+    double rx_drop_misc;
 };
 
 struct metrics {
     double rssi_norm;
-    double link_norm;
-    double retry_ratio;
-    double retry_rate;
-    double fail_rate;
-    double beacon_rate;
-    double packet_rate;
+    double link_tx_norm;
+    double link_rx_norm;
+    double link_all_norm;
+
+    double tx_retry_ratio;
+    double tx_retry_rate;
+    double tx_fail_rate;
+    double tx_beacon_rate;
+    double tx_packet_rate;
+
+    double rx_retry_ratio;
+    double rx_retry_rate;
+    double rx_drop_rate;
+    double rx_packet_rate;
+
     bool   valid_rssi;
-    bool   valid_link;
-    struct station_sample raw;
+    bool   valid_link_tx;
+    bool   valid_link_rx;
+    bool   valid_link_all;
+
+    struct station_sample raw_station;
 };
 
 static void usage(const char *argv0) {
@@ -83,6 +99,27 @@ static void normalize_mac(const char *src, char *dst, size_t dst_len) {
 
 static bool mac_equal(const char *a, const char *b) {
     return a && b && strcasecmp(a, b) == 0;
+}
+
+static int resolve_phy_name(const char *iface, char *phy_out, size_t phy_len) {
+    char link_path[256];
+    snprintf(link_path, sizeof(link_path), "/sys/class/net/%s/phy80211", iface);
+
+    char buf[PATH_MAX];
+    ssize_t len = readlink(link_path, buf, sizeof(buf) - 1);
+    if (len < 0) {
+        fprintf(stderr, "readlink(%s) failed: %s\n", link_path, strerror(errno));
+        return -1;
+    }
+    buf[len] = '\0';
+    const char *slash = strrchr(buf, '/');
+    if (!slash || slash[1] == '\0') {
+        fprintf(stderr, "Unexpected phy path: %s\n", buf);
+        return -1;
+    }
+    strncpy(phy_out, slash + 1, phy_len - 1);
+    phy_out[phy_len - 1] = '\0';
+    return 0;
 }
 
 static int detect_default_interface(char *out, size_t out_len) {
@@ -189,6 +226,9 @@ static int fetch_station_metrics(const char *iface, const char *target_mac,
     out->tx_retries = NAN;
     out->tx_failed = NAN;
     out->beacon_loss = NAN;
+    out->rx_packets = NAN;
+    out->rx_duplicates = NAN;
+    out->rx_drop_misc = NAN;
 
     while (fgets(line, sizeof(line), fp)) {
         char *trimmed = trim(line);
@@ -232,6 +272,16 @@ static int fetch_station_metrics(const char *iface, const char *target_mac,
             if (sscanf(trimmed + 12, "%llu", &loss) == 1) {
                 out->beacon_loss = (double)loss;
             }
+        } else if (strncmp(trimmed, "rx packets:", 11) == 0) {
+            unsigned long long rxp = 0;
+            if (sscanf(trimmed + 11, "%llu", &rxp) == 1) {
+                out->rx_packets = (double)rxp;
+            }
+        } else if (strncmp(trimmed, "rx drop misc:", 13) == 0) {
+            unsigned long long drop = 0;
+            if (sscanf(trimmed + 13, "%llu", &drop) == 1) {
+                out->rx_drop_misc = (double)drop;
+            }
         }
     }
 
@@ -248,7 +298,38 @@ static int fetch_station_metrics(const char *iface, const char *target_mac,
     return 0;
 }
 
-struct counter_snapshot {
+static int fetch_rx_duplicates(const char *phy, const char *iface, const char *mac, double *out_value) {
+    if (!phy || !iface || !mac || !out_value) return -1;
+
+    char mac_lower[32];
+    normalize_mac(mac, mac_lower, sizeof(mac_lower));
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "/sys/kernel/debug/ieee80211/%s/netdev:%s/stations/%s/rx_duplicates",
+             phy, iface, mac_lower);
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        return -1;
+    }
+
+    double total = 0.0;
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        char *colon = strchr(line, ':');
+        if (!colon) continue;
+        colon++;
+        double value = strtod(colon, NULL);
+        if (!isnan(value)) {
+            total += value;
+        }
+    }
+    fclose(fp);
+    *out_value = total;
+    return 0;
+}
+
+struct tx_counter_snapshot {
     double tx_packets;
     double tx_retries;
     double tx_failed;
@@ -256,7 +337,7 @@ struct counter_snapshot {
     bool valid;
 };
 
-struct link_metrics {
+struct tx_link_metrics {
     double ratio;
     double retries_per_s;
     double fails_per_s;
@@ -266,10 +347,10 @@ struct link_metrics {
     bool has_delta;
 };
 
-static bool compute_link_metrics(const struct station_sample *current,
-                                 const struct counter_snapshot *prev,
-                                 double interval_seconds,
-                                 struct link_metrics *out) {
+static bool compute_tx_link_metrics(const struct station_sample *current,
+                                    const struct tx_counter_snapshot *prev,
+                                    double interval_seconds,
+                                    struct tx_link_metrics *out) {
     if (!out) return false;
     memset(out, 0, sizeof(*out));
     out->ratio = NAN;
@@ -330,24 +411,120 @@ static bool compute_link_metrics(const struct station_sample *current,
     return true;
 }
 
+struct rx_snapshot {
+    double rx_packets;
+    double rx_duplicates;
+    double rx_drop_misc;
+};
+
+struct rx_link_metrics {
+    double ratio;
+    double retry_rate;
+    double drop_rate;
+    double packets_per_s;
+    double composite;
+    bool has_delta;
+};
+
+static bool compute_rx_link_metrics(const struct rx_snapshot *current,
+                                    const struct rx_snapshot *prev,
+                                    double interval_seconds,
+                                    struct rx_link_metrics *out) {
+    if (!out) return false;
+    memset(out, 0, sizeof(*out));
+    out->ratio = NAN;
+    out->retry_rate = NAN;
+    out->drop_rate = NAN;
+    out->composite = NAN;
+    out->has_delta = false;
+
+    if (!prev) {
+        out->ratio = 0.0;
+        out->retry_rate = 0.0;
+        out->drop_rate = 0.0;
+        out->composite = 100.0;
+        return true;
+    }
+
+    double delta_packets = current->rx_packets - prev->rx_packets;
+    double delta_duplicates = current->rx_duplicates - prev->rx_duplicates;
+    double delta_drop = current->rx_drop_misc - prev->rx_drop_misc;
+
+    if (delta_packets < 0.0 || delta_duplicates < 0.0 || delta_drop < 0.0) {
+        out->ratio = 0.0;
+        out->retry_rate = 0.0;
+        out->drop_rate = 0.0;
+        out->composite = 100.0;
+        return true;
+    }
+
+    if (interval_seconds <= 0.0) interval_seconds = 1.0;
+
+    out->retry_rate = delta_duplicates / interval_seconds;
+    out->drop_rate  = delta_drop / interval_seconds;
+    out->packets_per_s = delta_packets / interval_seconds;
+
+    double denom = delta_packets;
+    if (denom <= 0.0) denom = 1.0;
+    double ratio = delta_duplicates / denom;
+    if (ratio < 0.0) ratio = 0.0;
+    out->ratio = ratio;
+
+    double ratio_score      = 100.0 * (1.0 - clamp(ratio / 0.08, 0.0, 1.0));
+    double retry_rate_score = 100.0 * (1.0 - clamp(out->retry_rate / 50.0, 0.0, 1.0));
+    double drop_rate_score  = 100.0 * (1.0 - clamp(out->drop_rate  / 5.0,  0.0, 1.0));
+
+    double composite = 0.7 * ratio_score + 0.2 * retry_rate_score + 0.1 * drop_rate_score;
+    out->composite = clamp(composite, 0.0, 100.0);
+    out->has_delta = true;
+    return true;
+}
+
 static struct metrics derive_metrics(const struct station_sample *sample,
-                                     const struct link_metrics *link) {
+                                     const struct tx_link_metrics *tx,
+                                     const struct rx_link_metrics *rx,
+                                     double link_all, bool link_all_valid) {
     struct metrics m = {0};
-    m.raw = *sample;
+    m.tx_retry_ratio = NAN;
+    m.tx_retry_rate = NAN;
+    m.tx_fail_rate = NAN;
+    m.tx_beacon_rate = NAN;
+    m.tx_packet_rate = NAN;
+    m.rx_retry_ratio = NAN;
+    m.rx_retry_rate = NAN;
+    m.rx_drop_rate = NAN;
+    m.link_tx_norm = NAN;
+    m.link_rx_norm = NAN;
+    m.link_all_norm = NAN;
+    m.raw_station = *sample;
     if (!isnan(sample->signal_dbm)) {
         m.rssi_norm = normalize_linear(sample->signal_dbm, -85.0, 20.0);
         m.valid_rssi = true;
     }
-    if (link) {
-        m.retry_ratio = link->ratio;
-        m.retry_rate  = link->retries_per_s;
-        m.fail_rate   = link->fails_per_s;
-        m.beacon_rate = link->beacon_per_s;
-        m.packet_rate = link->packets_per_s;
-        if (!isnan(link->composite)) {
-            m.link_norm = link->composite;
-            m.valid_link = true;
+    if (tx) {
+        m.tx_retry_ratio = tx->ratio;
+        m.tx_retry_rate  = tx->retries_per_s;
+        m.tx_fail_rate   = tx->fails_per_s;
+        m.tx_beacon_rate = tx->beacon_per_s;
+        m.tx_packet_rate = tx->packets_per_s;
+        if (!isnan(tx->composite)) {
+            m.link_tx_norm = tx->composite;
+            m.valid_link_tx = true;
         }
+    }
+    if (rx) {
+        m.rx_retry_ratio = rx->ratio;
+        m.rx_retry_rate  = rx->retry_rate;
+        m.rx_drop_rate   = rx->drop_rate;
+        m.rx_packet_rate = rx->packets_per_s;
+        if (!isnan(rx->composite)) {
+            m.link_rx_norm = rx->composite;
+            m.valid_link_rx = true;
+        }
+    }
+    if (link_all_valid && !isnan(link_all)) {
+        m.link_all_norm = link_all;
+        m.valid_link_all = true;
     }
     return m;
 }
@@ -362,37 +539,119 @@ static void format_number(char *buf, size_t len, double value, const char *fmt) 
 
 static int send_udp_packet(int sock, const struct sockaddr_in *addr,
                            const struct metrics *m) {
-    char payload[400];
-    char raw_signal[32], raw_ratio[32], raw_retry_rate[32];
-    char raw_fail_rate[32], raw_beacon_rate[32], raw_packet_rate[32];
+    char payload[512];
+    char raw_signal[32];
+    char raw_tx_ratio[32], raw_tx_retry_rate[32], raw_tx_fail_rate[32], raw_tx_beacon_rate[32], raw_tx_packet_rate[32];
+    char raw_rx_ratio[32], raw_rx_retry_rate[32], raw_rx_drop_rate[32], raw_rx_packet_rate[32];
 
-    format_number(raw_signal, sizeof(raw_signal), m->raw.signal_dbm, "%.2f");
-    format_number(raw_ratio, sizeof(raw_ratio), m->retry_ratio, "%.6f");
-    format_number(raw_retry_rate, sizeof(raw_retry_rate), m->retry_rate, "%.3f");
-    format_number(raw_fail_rate, sizeof(raw_fail_rate), m->fail_rate, "%.3f");
-    format_number(raw_beacon_rate, sizeof(raw_beacon_rate), m->beacon_rate, "%.3f");
-    format_number(raw_packet_rate, sizeof(raw_packet_rate), m->packet_rate, "%.3f");
+    format_number(raw_signal, sizeof(raw_signal), m->raw_station.signal_dbm, "%.2f");
+    format_number(raw_tx_ratio, sizeof(raw_tx_ratio), m->tx_retry_ratio, "%.6f");
+    format_number(raw_tx_retry_rate, sizeof(raw_tx_retry_rate), m->tx_retry_rate, "%.3f");
+    format_number(raw_tx_fail_rate, sizeof(raw_tx_fail_rate), m->tx_fail_rate, "%.3f");
+    format_number(raw_tx_beacon_rate, sizeof(raw_tx_beacon_rate), m->tx_beacon_rate, "%.3f");
+    format_number(raw_tx_packet_rate, sizeof(raw_tx_packet_rate), m->tx_packet_rate, "%.3f");
+    format_number(raw_rx_ratio, sizeof(raw_rx_ratio), m->rx_retry_ratio, "%.6f");
+    format_number(raw_rx_retry_rate, sizeof(raw_rx_retry_rate), m->rx_retry_rate, "%.3f");
+    format_number(raw_rx_drop_rate, sizeof(raw_rx_drop_rate), m->rx_drop_rate, "%.3f");
+    format_number(raw_rx_packet_rate, sizeof(raw_rx_packet_rate), m->rx_packet_rate, "%.3f");
+
+    const char *labels[4];
+    double values[4];
+    size_t count = 0;
+
+    if (m->valid_rssi) {
+        labels[count] = "RSSI";
+        values[count] = m->rssi_norm;
+        count++;
+    }
+    if (m->valid_link_tx) {
+        labels[count] = "Link TX";
+        values[count] = m->link_tx_norm;
+        count++;
+    }
+    if (m->valid_link_rx) {
+        labels[count] = "Link RX";
+        values[count] = m->link_rx_norm;
+        count++;
+    }
+    if (m->valid_link_all) {
+        labels[count] = "Link ALL";
+        values[count] = m->link_all_norm;
+        count++;
+    }
+
+    char text_buf[256] = "[";
+    char value_buf[256] = "[";
+    size_t text_off = 1;
+    size_t value_off = 1;
+    bool first = true;
+    for (size_t i = 0; i < count; i++) {
+        if (!first) {
+            text_buf[text_off++] = ',';
+            value_buf[value_off++] = ',';
+        }
+        int wt = snprintf(text_buf + text_off, sizeof(text_buf) - text_off,
+                          "\"%s\"", labels[i]);
+        if (wt < 0 || text_off + (size_t)wt >= sizeof(text_buf)) return -1;
+        text_off += (size_t)wt;
+
+        int wv = snprintf(value_buf + value_off, sizeof(value_buf) - value_off,
+                          "%.2f", values[i]);
+        if (wv < 0 || value_off + (size_t)wv >= sizeof(value_buf)) return -1;
+        value_off += (size_t)wv;
+        first = false;
+    }
+    text_buf[text_off++] = ']';
+    text_buf[text_off] = '\0';
+    value_buf[value_off++] = ']';
+    value_buf[value_off] = '\0';
+
+    double link_tx = m->valid_link_tx ? m->link_tx_norm : NAN;
+    double link_rx = m->valid_link_rx ? m->link_rx_norm : NAN;
+    double link_all = m->valid_link_all ? m->link_all_norm : NAN;
+
+    double link_fallback = !isnan(link_all) ? link_all :
+                           !isnan(link_tx) ? link_tx :
+                           !isnan(link_rx) ? link_rx : 0.0;
 
     double rssi_value = m->valid_rssi ? m->rssi_norm : 0.0;
-    double link_value = m->valid_link ? m->link_norm : 0.0;
+    double link_value = link_fallback;
+    double link_tx_value = !isnan(link_tx) ? link_tx : link_value;
+    double link_rx_value = !isnan(link_rx) ? link_rx : link_value;
+    double link_all_value = !isnan(link_all) ? link_all : link_value;
+
+    char raw_link_tx[32], raw_link_rx[32], raw_link_all[32];
+    format_number(raw_link_tx, sizeof(raw_link_tx), link_tx, "%.2f");
+    format_number(raw_link_rx, sizeof(raw_link_rx), link_rx, "%.2f");
+    format_number(raw_link_all, sizeof(raw_link_all), link_all, "%.2f");
 
     int len = snprintf(payload, sizeof(payload),
-        "{\"rssi\":%.2f,\"link\":%.2f,"
-        "\"text\":[\"RSSI\",\"Link\"],"
-        "\"value\":[%.2f,%.2f],"
-        "\"raw\":{\"signal\":%s,\"retry_ratio\":%s,"
-        "\"retry_rate\":%s,\"fail_rate\":%s,"
-        "\"beacon_rate\":%s,\"packet_rate\":%s}}\n",
+        "{\"rssi\":%.2f,\"link\":%.2f,\"link_tx\":%.2f,\"link_rx\":%.2f,\"link_all\":%.2f,"
+        "\"text\":%s,\"value\":%s,"
+        "\"raw\":{\"signal\":%s,"
+        "\"tx_retry_ratio\":%s,\"tx_retry_rate\":%s,\"tx_fail_rate\":%s,\"tx_beacon_rate\":%s,\"tx_packet_rate\":%s,"
+        "\"rx_retry_ratio\":%s,\"rx_retry_rate\":%s,\"rx_drop_rate\":%s,\"rx_packet_rate\":%s,"
+        "\"link_tx\":%s,\"link_rx\":%s,\"link_all\":%s}}\n",
         rssi_value,
         link_value,
-        rssi_value,
-        link_value,
+        link_tx_value,
+        link_rx_value,
+        link_all_value,
+        text_buf,
+        value_buf,
         raw_signal,
-        raw_ratio,
-        raw_retry_rate,
-        raw_fail_rate,
-        raw_beacon_rate,
-        raw_packet_rate);
+        raw_tx_ratio,
+        raw_tx_retry_rate,
+        raw_tx_fail_rate,
+        raw_tx_beacon_rate,
+        raw_tx_packet_rate,
+        raw_rx_ratio,
+        raw_rx_retry_rate,
+        raw_rx_drop_rate,
+        raw_rx_packet_rate,
+        raw_link_tx,
+        raw_link_rx,
+        raw_link_all);
     if (len < 0 || (size_t)len >= sizeof(payload)) {
         fprintf(stderr, "Failed to format payload\n");
         return -1;
@@ -462,6 +721,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    char phy_name[64];
+    if (resolve_phy_name(device, phy_name, sizeof(phy_name)) != 0) {
+        return 1;
+    }
+
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         fprintf(stderr, "socket failed: %s\n", strerror(errno));
@@ -478,11 +742,17 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    struct counter_snapshot prev = {.valid = false};
+    struct tx_counter_snapshot prev_tx = {.valid = false};
+    struct rx_snapshot prev_rx = {0};
+    bool prev_rx_valid = false;
+    struct rx_link_metrics prev_rx_link = {0};
+    bool prev_rx_metrics_valid = false;
     char active_mac[32] = {0};
     struct timespec last_ts = {0};
     bool have_last_ts = false;
-    double ema_link = 100.0;
+    double ema_tx = 100.0;
+    double ema_rx = 100.0;
+    double ema_all = 100.0;
     const double ema_alpha = 0.4;
     int sent = 0;
 
@@ -508,33 +778,109 @@ int main(int argc, char **argv) {
 
         if (fetch_station_metrics(device, mac_filter[0] ? mac_filter : NULL,
                                   &sample, matched_mac, sizeof(matched_mac)) != 0) {
-            prev.valid = false;
+            prev_tx.valid = false;
+            prev_rx_valid = false;
             have_last_ts = false;
             fprintf(stderr, "Unable to fetch metrics for %s\n", device);
         } else {
+            const char *mac_for_path = matched_mac[0] ? matched_mac : mac_filter;
+            if (mac_for_path && mac_for_path[0]) {
+                double rx_dup = NAN;
+                if (fetch_rx_duplicates(phy_name, device, mac_for_path, &rx_dup) == 0) {
+                    sample.rx_duplicates = rx_dup;
+                }
+            }
+            if (isnan(sample.rx_duplicates)) sample.rx_duplicates = 0.0;
+            if (isnan(sample.rx_packets)) sample.rx_packets = 0.0;
+            if (isnan(sample.rx_drop_misc)) sample.rx_drop_misc = 0.0;
+
             if (matched_mac[0] && strcmp(matched_mac, active_mac) != 0) {
                 strncpy(active_mac, matched_mac, sizeof(active_mac) - 1);
                 active_mac[sizeof(active_mac) - 1] = '\0';
-                prev.valid = false;
-                ema_link = 100.0;
+                prev_tx.valid = false;
+                prev_rx_valid = false;
+                ema_tx = ema_rx = ema_all = 100.0;
                 have_last_ts = false;
                 printf("Tracking station %s on %s\n", active_mac, device);
                 fflush(stdout);
             }
 
-            struct link_metrics link = {0};
-            bool link_ready = compute_link_metrics(&sample,
-                                                   prev.valid ? &prev : NULL,
-                                                   interval_s, &link);
-
-            if (link_ready && link.has_delta) {
-                ema_link = ema_alpha * link.composite + (1.0 - ema_alpha) * ema_link;
-                link.composite = ema_link;
+    struct tx_link_metrics tx_link = {0};
+    bool tx_ready = compute_tx_link_metrics(&sample,
+                                            prev_tx.valid ? &prev_tx : NULL,
+                                            interval_s, &tx_link);
+            if (tx_ready) {
+                if (tx_link.has_delta) {
+                    ema_tx = ema_alpha * tx_link.composite + (1.0 - ema_alpha) * ema_tx;
+                }
+                tx_link.composite = ema_tx;
             }
 
-            struct metrics metrics = derive_metrics(&sample, link_ready ? &link : NULL);
-            metrics.link_norm = link_ready ? link.composite : ema_link;
-            metrics.valid_link = link_ready;
+            struct rx_snapshot rx_sample = {
+                .rx_packets = sample.rx_packets,
+                .rx_duplicates = sample.rx_duplicates,
+                .rx_drop_misc = sample.rx_drop_misc,
+            };
+            struct rx_link_metrics rx_link = prev_rx_metrics_valid ? prev_rx_link : (struct rx_link_metrics){0};
+            bool rx_ready = false;
+            if (!isnan(sample.rx_packets)) {
+                struct rx_link_metrics tmp = {0};
+                rx_ready = compute_rx_link_metrics(&rx_sample,
+                                                   prev_rx_valid ? &prev_rx : NULL,
+                                                   interval_s, &tmp);
+                if (rx_ready) {
+                    if (tmp.has_delta) {
+                        ema_rx = ema_alpha * tmp.composite + (1.0 - ema_alpha) * ema_rx;
+                        rx_link = tmp;
+                        rx_link.composite = ema_rx;
+                        prev_rx_link = rx_link;
+                        prev_rx_link.has_delta = true;
+                        prev_rx_metrics_valid = true;
+                    } else {
+                        rx_link.composite = ema_rx;
+                    }
+                }
+            }
+            if (!rx_ready && prev_rx_metrics_valid) {
+                rx_ready = true;
+                rx_link = prev_rx_link;
+                rx_link.has_delta = false;
+                rx_link.composite = ema_rx;
+            }
+
+            double link_all = NAN;
+            bool link_all_valid = false;
+            double sum = 0.0;
+            int contributors = 0;
+            if (tx_ready) { sum += ema_tx; contributors++; }
+            if (rx_ready) { sum += ema_rx; contributors++; }
+            if (contributors > 0) {
+                double avg = sum / contributors;
+                ema_all = ema_alpha * avg + (1.0 - ema_alpha) * ema_all;
+                link_all = ema_all;
+                link_all_valid = true;
+            } else {
+                link_all = ema_all;
+                link_all_valid = true;
+            }
+
+            struct metrics metrics = derive_metrics(&sample,
+                                                    tx_ready ? &tx_link : NULL,
+                                                    rx_ready ? &rx_link : NULL,
+                                                    link_all, link_all_valid);
+
+            if (!metrics.valid_link_tx && tx_ready) {
+                metrics.link_tx_norm = ema_tx;
+                metrics.valid_link_tx = true;
+            }
+            if (!metrics.valid_link_rx && rx_ready) {
+                metrics.link_rx_norm = ema_rx;
+                metrics.valid_link_rx = true;
+            }
+            if (!metrics.valid_link_all) {
+                metrics.link_all_norm = ema_all;
+                metrics.valid_link_all = true;
+            }
 
             if (send_udp_packet(sock, &dest, &metrics) != 0) {
                 fprintf(stderr, "Failed to send UDP payload\n");
@@ -543,30 +889,47 @@ int main(int argc, char **argv) {
             if (verbose) {
                 double hz = interval_s > 0.0 ? (1.0 / interval_s) : 0.0;
                 printf("mac=%s Hz=%.2f rssi=%.1f dBm (norm %.1f) "
-                       "link=%.1f (ratio=%.4f, retries/s=%.2f, fail/s=%.2f, "
-                       "beacon/s=%.2f, packets/s=%.2f)\n",
+                       "link_tx=%.1f link_rx=%.1f link_all=%.1f "
+                       "tx_ratio=%.4f tx_retries/s=%.2f tx_fail/s=%.2f tx_beacon/s=%.2f tx_packets/s=%.2f "
+                       "rx_ratio=%.4f rx_retries/s=%.2f rx_drop/s=%.2f rx_packets/s=%.2f\n",
                        active_mac[0] ? active_mac : matched_mac,
                        hz,
                        sample.signal_dbm,
                        metrics.valid_rssi ? metrics.rssi_norm : NAN,
-                       metrics.valid_link ? metrics.link_norm : NAN,
-                       link.has_delta ? link.ratio : NAN,
-                       link.has_delta ? link.retries_per_s : NAN,
-                       link.has_delta ? link.fails_per_s : NAN,
-                       link.has_delta ? link.beacon_per_s : NAN,
-                       link.has_delta ? link.packets_per_s : NAN);
+                       metrics.valid_link_tx ? metrics.link_tx_norm : NAN,
+                       metrics.valid_link_rx ? metrics.link_rx_norm : NAN,
+                       metrics.valid_link_all ? metrics.link_all_norm : NAN,
+                       tx_ready ? tx_link.ratio : NAN,
+                       tx_ready ? tx_link.retries_per_s : NAN,
+                       tx_ready ? tx_link.fails_per_s : NAN,
+                       tx_ready ? tx_link.beacon_per_s : NAN,
+                       tx_ready ? tx_link.packets_per_s : NAN,
+                       rx_ready ? rx_link.ratio : NAN,
+                       rx_ready ? rx_link.retry_rate : NAN,
+                       rx_ready ? rx_link.drop_rate : NAN,
+                       rx_ready ? rx_link.packets_per_s : NAN);
                 fflush(stdout);
             }
 
             if (!isnan(sample.tx_packets) && !isnan(sample.tx_retries) &&
                 !isnan(sample.tx_failed) && !isnan(sample.beacon_loss)) {
-                prev.tx_packets = sample.tx_packets;
-                prev.tx_retries = sample.tx_retries;
-                prev.tx_failed  = sample.tx_failed;
-                prev.beacon_loss = sample.beacon_loss;
-                prev.valid = true;
+                prev_tx.tx_packets = sample.tx_packets;
+                prev_tx.tx_retries = sample.tx_retries;
+                prev_tx.tx_failed  = sample.tx_failed;
+                prev_tx.beacon_loss = sample.beacon_loss;
+                prev_tx.valid = true;
             } else {
-                prev.valid = false;
+                prev_tx.valid = false;
+            }
+
+            prev_rx = rx_sample;
+            prev_rx_valid = true;
+
+            if (rx_ready) {
+                prev_rx_link = rx_link;
+                prev_rx_metrics_valid = true;
+            } else {
+                prev_rx_metrics_valid = prev_rx_metrics_valid && rx_ready;
             }
         }
 

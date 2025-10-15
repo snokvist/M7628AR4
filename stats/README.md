@@ -1,7 +1,5 @@
 # OpenWrt Wireless Diagnostics Cheatsheet
 
-run codex resume 0199e3bd-974b-7f83-89de-d502e39b99b8
-
 ## Environment Basics
 - Router: `ssh root@192.168.2.1`
 - Radios: `phy0-sta0` (2.4 GHz client, SSID `Trollvinter`), `phy1-sta0` (5 GHz client, SSID `Drone`)
@@ -235,18 +233,26 @@ Use the metrics below to identify a link that is unstable or about to degrade. C
   # or discover peers first
   ./wifi_metrics_sender -L
   ```
-  The sender polls `iw dev <iface> station get <MAC>`, normalises RSSI, derives the link score from retry/failed/beacon deltas (smoothed with an EMA), and emits JSON:
+  The sender polls `iw dev <iface> station get <MAC>` plus `/sys/kernel/debug/ieee80211/<phy>/statistics`, normalises RSSI, derives TX/RX health scores (smoothed with an EMA), and emits JSON:
   ```
   {
-    "rssi": <0-100>, "link": <0-100>,
-    "text": ["RSSI","Link"], "value": [<rssi>,<link>],
+    "rssi": <0-100>,
+    "link": <alias of link_all>,
+    "link_tx": <0-100>,
+    "link_rx": <0-100>,
+    "link_all": <0-100>,
+    "text": ["RSSI","Link TX","Link RX","Link ALL"],
+    "value": [<rssi>,<link_tx>,<link_rx>,<link_all>],
     "raw": {
       "signal": dBm,
-      "retry_ratio": …,
-      "retry_rate": …/s,
-      "fail_rate": …/s,
-      "beacon_rate": …/s,
-      "packet_rate": …/s
+      "tx_retry_ratio": …,
+      "tx_retry_rate": …/s,
+      "tx_fail_rate": …/s,
+      "tx_beacon_rate": …/s,
+      "tx_packet_rate": …/s,
+      "rx_retry_ratio": …,
+      "rx_retry_rate": …/s,
+      "rx_drop_rate": …/s
     }
   }
   ```
