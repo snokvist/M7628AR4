@@ -245,6 +245,61 @@ static int find_first_station(const char *iface, char *mac_out, size_t mac_len) 
     return 0;
 }
 
+static int find_station_by_mac(const char *iface, const char *target_mac,
+                               char *mac_out, size_t mac_len) {
+    if (!target_mac || !*target_mac || !mac_out || mac_len == 0) return -1;
+
+    char cmd[160];
+    int written = snprintf(cmd, sizeof(cmd), "iw dev %s station dump", iface);
+    if (written < 0 || (size_t)written >= sizeof(cmd)) {
+        fprintf(stderr, "Command overflow\n");
+        return -1;
+    }
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+        fprintf(stderr, "popen(%s) failed: %s\n", cmd, strerror(errno));
+        return -1;
+    }
+
+    char line[256];
+    bool found = false;
+    while (fgets(line, sizeof(line), fp)) {
+        char *trimmed = trim(line);
+        if (strncmp(trimmed, "Station ", 8) == 0) {
+            char mac[32] = {0};
+            if (sscanf(trimmed + 8, "%31s", mac) == 1) {
+                if (mac_equal(mac, target_mac)) {
+                    strncpy(mac_out, mac, mac_len - 1);
+                    mac_out[mac_len - 1] = '\0';
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    int status = pclose(fp);
+    if (status == -1) {
+        fprintf(stderr, "station dump failed to close\n");
+        return -1;
+    }
+
+    if (!found) {
+        return 1;
+    }
+
+    return 0;
+}
+
+static double timespec_diff_seconds(const struct timespec *later,
+                                    const struct timespec *earlier) {
+    if (!later || !earlier) return 0.0;
+    time_t sec = later->tv_sec - earlier->tv_sec;
+    long nsec = later->tv_nsec - earlier->tv_nsec;
+    return (double)sec + (double)nsec / 1e9;
+}
+
 static int fetch_station_metrics(const char *iface, const char *target_mac,
                                  struct station_sample *out,
                                  char *matched_mac, size_t matched_len) {
@@ -761,18 +816,11 @@ int main(int argc, char **argv) {
         return rc == 0 ? 0 : 1;
     }
 
-    if (!mac_filter[0]) {
-        char first_mac[32] = {0};
-        int rc = find_first_station(device, first_mac, sizeof(first_mac));
-        if (rc != 0) {
-            if (rc > 0) {
-                fprintf(stderr, "Unable to find a station on %s; specify -m\n", device);
-            }
-            return 1;
-        }
-        normalize_mac(first_mac, mac_filter, sizeof(mac_filter));
-        printf("Defaulting to station %s\n", first_mac);
-        fflush(stdout);
+    bool auto_select_mac = !mac_filter[0];
+    char target_mac[32] = {0};
+    if (!auto_select_mac) {
+        strncpy(target_mac, mac_filter, sizeof(target_mac) - 1);
+        target_mac[sizeof(target_mac) - 1] = '\0';
     }
 
     char phy_name[64];
@@ -809,6 +857,10 @@ int main(int argc, char **argv) {
     double ema_all = 100.0;
     const double ema_alpha = 0.4;
     int sent = 0;
+    const double mac_retry_interval_s = 10.0;
+    struct timespec last_mac_attempt = {0};
+    bool have_last_mac_attempt = false;
+    bool notified_waiting = false;
 
     for (;;) {
         struct station_sample sample;
@@ -830,14 +882,98 @@ int main(int argc, char **argv) {
         last_ts = now_ts;
         have_last_ts = true;
 
-        if (fetch_station_metrics(device, mac_filter[0] ? mac_filter : NULL,
+        if (!target_mac[0]) {
+            bool should_attempt = !have_last_mac_attempt;
+            if (!should_attempt && have_last_mac_attempt) {
+                double elapsed = timespec_diff_seconds(&now_ts, &last_mac_attempt);
+                if (elapsed >= mac_retry_interval_s) {
+                    should_attempt = true;
+                }
+            }
+
+            if (should_attempt) {
+                int rc = -1;
+                if (auto_select_mac) {
+                    char first_mac[32] = {0};
+                    rc = find_first_station(device, first_mac, sizeof(first_mac));
+                    if (rc == 0) {
+                        strncpy(target_mac, first_mac, sizeof(target_mac) - 1);
+                        target_mac[sizeof(target_mac) - 1] = '\0';
+                        printf("Defaulting to station %s\n", first_mac);
+                        fflush(stdout);
+                        notified_waiting = false;
+                    } else if (rc > 0) {
+                        if (!notified_waiting) {
+                            fprintf(stderr, "Waiting for a station on %s...\n", device);
+                            notified_waiting = true;
+                        }
+                    }
+                } else {
+                    char discovered[32] = {0};
+                    rc = find_station_by_mac(device, mac_filter, discovered, sizeof(discovered));
+                    if (rc == 0) {
+                        strncpy(target_mac, discovered, sizeof(target_mac) - 1);
+                        target_mac[sizeof(target_mac) - 1] = '\0';
+                        printf("Found station %s on %s\n", target_mac, device);
+                        fflush(stdout);
+                        notified_waiting = false;
+                    } else if (rc > 0) {
+                        if (!notified_waiting) {
+                            fprintf(stderr, "Waiting for station %s on %s...\n", mac_filter, device);
+                            notified_waiting = true;
+                        }
+                    }
+                }
+                if (rc < 0) {
+                    fprintf(stderr, "Station search failed on %s\n", device);
+                }
+                last_mac_attempt = now_ts;
+                have_last_mac_attempt = true;
+            }
+
+            if (!target_mac[0]) {
+                prev_tx.valid = false;
+                prev_rx_valid = false;
+                have_last_ts = false;
+                active_mac[0] = '\0';
+                if (interval_ms <= 0) {
+                    break;
+                }
+                struct timespec ts = {
+                    .tv_sec = interval_ms / 1000,
+                    .tv_nsec = (interval_ms % 1000) * 1000000L,
+                };
+                nanosleep(&ts, NULL);
+                continue;
+            }
+        }
+
+        if (fetch_station_metrics(device, target_mac,
                                   &sample, matched_mac, sizeof(matched_mac)) != 0) {
             prev_tx.valid = false;
             prev_rx_valid = false;
             have_last_ts = false;
             fprintf(stderr, "Unable to fetch metrics for %s\n", device);
+            target_mac[0] = '\0';
+            active_mac[0] = '\0';
+            last_mac_attempt = now_ts;
+            have_last_mac_attempt = true;
+            notified_waiting = false;
+            if (interval_ms <= 0) {
+                break;
+            }
+            struct timespec ts = {
+                .tv_sec = interval_ms / 1000,
+                .tv_nsec = (interval_ms % 1000) * 1000000L,
+            };
+            nanosleep(&ts, NULL);
+            continue;
         } else {
-            const char *mac_for_path = matched_mac[0] ? matched_mac : mac_filter;
+            if (matched_mac[0]) {
+                strncpy(target_mac, matched_mac, sizeof(target_mac) - 1);
+                target_mac[sizeof(target_mac) - 1] = '\0';
+            }
+            const char *mac_for_path = matched_mac[0] ? matched_mac : target_mac;
             if (mac_for_path && mac_for_path[0]) {
                 double rx_dup = NAN;
                 if (fetch_rx_duplicates(phy_name, device, mac_for_path, &rx_dup) == 0) {
