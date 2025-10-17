@@ -10,6 +10,17 @@
 
 	aliases { label-mac-device = &ethernet; };
 	chosen {bootargs = "console=ttyS1,57600 rootfstype=squashfs,jffs2";};
+
+	keys {
+		compatible = "gpio-keys";
+
+		wds {
+			label = "wds";
+			linux,code = <KEY_RFKILL>;
+			linux,input-type = <EV_SW>;
+			gpios = <&gpio 11 GPIO_ACTIVE_LOW>;
+		};
+	};
 };
 
 &spi0 {
