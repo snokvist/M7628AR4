@@ -1,0 +1,28 @@
+  #!/bin/sh
+  GPIO=523
+  SYS=/sys/class/gpio/gpio$GPIO
+  HOOK=/usr/sbin/wds-toggle.sh   # optional callback you can create later
+
+  cleanup() {
+      echo $GPIO >/sys/class/gpio/unexport 2>/dev/null
+      logger -t wds-switchd "stopped"
+      exit 0
+  }
+  trap cleanup INT TERM
+
+  [ -d "$SYS" ] || echo $GPIO >/sys/class/gpio/export
+  echo in >"$SYS/direction"
+
+  prev=$(cat "$SYS/value")
+  logger -t wds-switchd "started (initial=$prev)"
+
+  while true; do
+      cur=$(cat "$SYS/value")
+      if [ "$cur" != "$prev" ]; then
+          state=$([ "$cur" = 0 ] && echo pressed || echo released)
+          logger -t wds-switchd "WDS switch $state (value=$cur)"
+          [ -x "$HOOK" ] && "$HOOK" "$state" "$cur"
+          prev=$cur
+      fi
+      sleep 1
+  done
